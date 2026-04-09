@@ -36,22 +36,22 @@ plot(ll_boundary$geometry, main = "Embu Living Lab boundary")
 ####### Load RASTERS 
 data_path <- "data/rasters/"
 
-# i forgot to clip the rasters before to the LL so using a function and then clipping 
+# I now downloaded already in LL cropped so this part is not needed 
 # clip them before so size and processing smaller 
-load_clip <- function(filename)
-  {r <- rast(paste0(data_path, filename))
-  r <- crop(r, ll_vect)
-  r <- mask(r, ll_vect)
-  return(r)}
-
-r_temp      <- load_clip("Temperature_MODIS_2000_2025.tif")
-r_rainfall  <- load_clip("Rainfall_CHIRPS_2000_2025.tif")
-r_elevation <- load_clip("Elevation_SRTM.tif")
-r_slope     <- load_clip("Slope_SRTM.tif")
-r_aspect    <- load_clip("Aspect_SRTM.tif")
-r_cropland  <- load_clip("ldsf_kenya_cropland_embuLL.tif")
-r_treecover <- load_clip("ldsf_kenya_tc_embuLL.tif")
-cat("All rasters loaded and clipped to Living Lab boundary\n")
+# load_clip <- function(filename)
+#   {r <- rast(paste0(data_path, filename))
+#   r <- crop(r, ll_vect)
+#   r <- mask(r, ll_vect)
+#   return(r)}
+# 
+# r_temp      <- load_clip("Temperature_MODIS_2000_2025.tif")
+# r_rainfall  <- load_clip("Rainfall_CHIRPS_2000_2025.tif")
+# r_elevation <- load_clip("Elevation_SRTM.tif")
+# r_slope     <- load_clip("Slope_SRTM.tif")
+# r_aspect    <- load_clip("Aspect_SRTM.tif")
+# r_cropland  <- load_clip("ldsf_kenya_cropland_embuLL.tif")
+# r_treecover <- load_clip("ldsf_kenya_tc_embuLL.tif")
+# cat("All rasters loaded and clipped to Living Lab boundary\n")
 # Dropped: TreeCover_Hansen_pct_2024.tif ; CanopyHeight_ETH_2020_m.tif ; 
 #  checking
 print(r_rainfall)
@@ -179,13 +179,10 @@ summary(env_scaled)
 set.seed(55)
 n_pixels <- nrow(env_scaled)
 cat("Total pixels for clustering:", n_pixels, "\n")
-
-#bic_result_55 <- mclustBIC(env_scaled, G = 5:10)
-summary(bic_result_55)
+bic_result_55 <- mclustBIC(env_scaled, G = 5:10)
+summary(bic_result_55) # VVV10 with BIC -1854266
 plot(bic_result_55, main = "BIC — clusters for Embu LL (100m)")
-
 # ALSO: The BIC values seem to be quite high compared to the literature? So not a good fit. Adding more variables could be better? 
-# 
 # 
 # 
 # #### Trying other values 
@@ -211,7 +208,7 @@ plot(bic_result_55, main = "BIC — clusters for Embu LL (100m)")
 # plot(bic_result, main = "BIC — clusters for Embu LL")
 # # seems like 11 or even 20 clusters are fitting well with BIC -11093.19 and -11143.10046 respectively 
 
-cat("Continuing with G=6 for now but VERY unsure!\n")
+cat("Continuing with G=10 for now but VERY unsure if the model is working good enough!\n")
 
 
 
@@ -224,7 +221,7 @@ optimal_G <- 10
     which.max(apply(bic_result_55, 2, max, na.rm = TRUE))]
 cat("Best covariance model:", model_name, "\n")
 # fit on full pixel dataset not subsample used for BIC 
-mc_model_55 <- Mclust(env_scaled, optimal_G, modelNames = "model_name")
+mc_model_55 <- Mclust(env_scaled, optimal_G, modelNames = "VVV")
 summary(mc_model_55)
 
 
@@ -248,18 +245,14 @@ cluster_means <- aggregate(
   FUN = mean)
 cat("\nCluster means:\n")
 print(round(cluster_means[, -1], 2))
-# Use this table to name your strata ecologically, e.g.:
-# high elevation + high rainfall + high tree cover = "Moist agroforest"
-# low elevation + low rainfall + high cropland = "Dryland cropland"
+# Use  table to name  strata
 
 # Cluster area summary — kept as separate object from allocation table
 cluster_area <- data.frame(
   Cluster  = levels(env_df$cluster),
-  N_pixels = as.integer(table(env_df$cluster))
-)
+  N_pixels = as.integer(table(env_df$cluster)))
 cluster_area$Pct_area <- round(
-  cluster_area$N_pixels / sum(cluster_area$N_pixels) * 100, 1
-)
+  cluster_area$N_pixels / sum(cluster_area$N_pixels) * 100, 1)
 cat("\nCluster area breakdown:\n")
 print(cluster_area)
 
@@ -299,8 +292,8 @@ ggsave("outputs/cluster_means_heatmap.png", width = 9, height = 5, dpi = 300)
 cluster_points <- st_as_sf(
   env_df[, c("x", "y", "cluster", "uncertainty")],
   coords = c("x", "y"),
-  crs    = 4326   # WGS84 — same as GEE export and shapefile
-)
+  crs    = 4326)  # WGS84 — same as GEE export and shapefile
+
 # not sure if that chunk is correct?! 
 
 cluster_rast <- rasterize(
@@ -334,10 +327,9 @@ cat("Non-NA pixels:", sum(!is.na(values(cluster_rast))),
 
 ######### PLOTTING CLUSTER MAP #####################
 display.brewer.all()
-cls_colors <- brewer.pal(max(optimal_G, 3), "Set2")[1:optimal_G]
+cls_colors <- brewer.pal(max(optimal_G, 10), "Set2")[1:optimal_G]
 
-
-cls_colors_6 <- c("#2166ac", "#f4a582", "#1a9641", "darkolivegreen4", "darkorange2", "khaki3")
+#cls_colors_6 <- c("#2166ac", "#f4a582", "#1a9641", "darkolivegreen4", "darkorange2", "khaki3")
 
 plot(cluster_rast,
      col    = cls_colors,
@@ -366,16 +358,15 @@ plot(ll_vect, add = TRUE, border = "black", lwd = 2)
 
 ######### EXPORT FOR QGIS or ODK ########################### 
 # Unsure about this follwing part 
-# exporting as GeoTIFF i assume? 
 dir.create("outputs/", showWarnings = FALSE)
 
 writeRaster(cluster_rast,
-            "outputs/EmbuLL_clusters_mclust_9.tif",
+            "outputs/LL_mclust_10.tif",
             overwrite = TRUE,
             datatype  = "INT1U")
 
 writeRaster(uncert_rast,
-            "outputs/EmbuLL_uncertainty_mclust_9.tif",
+            "outputs/LL_uncertainty_mclust_10.tif",
             overwrite = TRUE)
 
 # maybe useful to export cluster assignments with coordinates as CSV
