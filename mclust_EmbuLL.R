@@ -16,8 +16,11 @@ library(sf)
 library(corrplot)   
 library(RColorBrewer)
 library(spsurvey)
+library(osmdata) # for masking buidlings and roads when allocating sample points 
 
-# NOTE for self: THIS IS THE CORRECT VERSION connected to GitHub
+
+
+# NOTE for self: THIS IS THE CORRECT VERSION connected to GitHub repo (GitHub_Stratification_Embu_LL)
 
 
 ######################## 1. LOAD + Crop RASTERS to LL Boundary ###################
@@ -174,61 +177,39 @@ summary(env_scaled)
 
 ######################## 7. BIC - OPTIMAL NUMBER OF CLUSTERS ######################## 
 # mclust uses BIC (Bayesian Information Criterion) to find best fitting model and select clusters
-#remember: less negative BIC is better model but  when differences between top models are < 2 BIC units,
-#     prefer the simpler model (fewer clusters
+# LDSF requirement: 3 plots per cluster is minimum 
 set.seed(55)
 n_pixels <- nrow(env_scaled)
-cat("Total pixels for clustering:", n_pixels, "\n")
-bic_result_55 <- mclustBIC(env_scaled, G = 5:10)
-summary(bic_result_55) # VVV10 with BIC -1854266
-plot(bic_result_55, main = "BIC — clusters for Embu LL (100m)")
-# ALSO: The BIC values seem to be quite high compared to the literature? So not a good fit. Adding more variables could be better? 
-# 
-# 
-# #### Trying other values 
-# # Trying with 6 since 9 might be too much if i sample 3-4 weeks 
-# set.seed(66)
-# n_pixels <- nrow(env_scaled)
-# bic_result_66 <- mclustBIC(env_scaled, G = 1:6)
-# summary(bic_result_66)
-# plot(bic_result, main = "BIC — clusters for Embu LL")
-# # best result: VVV6 VEV 6 and VVV5 with a bic around -12029.64
-# 
-# # WHICH ONE IS A BETTER CHOICE? 
-# # From the old run: I guess the smaller  bcs with only 109 pixels and 6 clusters i would only get 18pixel per cluster. 
-# # Some of the smaller clusters maybe even have e.g. 8 pixel and then i cannot allocate "enough" field-clusters to this stratum bcs of 1km2 resolution 
-# # then that areas would be undersampled i guess ?! 
-# 
-# 
-# # testing if it will always increase or drop at some point
-# set.seed(111)
-# n_pixels <- nrow(env_scaled)
-# bic_result_111 <- mclustBIC(env_scaled, G = 1:20)
-# summary(bic_result_111)
-# plot(bic_result, main = "BIC — clusters for Embu LL")
-# # seems like 11 or even 20 clusters are fitting well with BIC -11093.19 and -11143.10046 respectively 
+bic_result <- mclustBIC(env_scaled, G = 4:7)
+summary(bic_result)
+plot(bic_result, main = "BIC — G=4 to 7 for Embu LL (100m)")
 
-cat("Continuing with G=10 for now but VERY unsure if the model is working good enough!\n")
+#  for 5:10 --> VV10 with BIC -1854266
+# for 4:7 --> VVV7 with BIC -1922277
+# for sampling 15 days 7 clusters is upper limit since it gives only 7 plots to distribute according to a weighted design
 
+
+cat("Continuing with G=7 for now.\n")
 
 
 
 
 ######################## 8. FIT FINAL MCLUST MODEL ######################## 
-optimal_G <- 10
+optimal_G <- 7
 
-  model_name <- dimnames(bic_result_55)[[2]][
-    which.max(apply(bic_result_55, 2, max, na.rm = TRUE))]
+  model_name <- dimnames(bic_result)[[2]][
+    which.max(apply(bic_result, 2, max, na.rm = TRUE))]
+  
 cat("Best covariance model:", model_name, "\n")
-# fit on full pixel dataset not subsample used for BIC 
-mc_model_55 <- Mclust(env_scaled, optimal_G, modelNames = "VVV")
-summary(mc_model_55)
+
+# fit on full pixel dataset for BIC 
+mc_model <- Mclust(env_scaled, optimal_G, modelNames = model_name)
+summary(mc_model)
 
 
 #cluster ID and uncertainty (prob. for not belonging to same cluster) for each pixel
-env_df$cluster <- as.factor(mc_model_55$classification)
-env_df$uncertainty <- mc_model_55$uncertainty
-# Uncertainty = probability of NOT belonging to assigned cluster
+env_df$cluster <- as.factor(mc_model$classification)
+env_df$uncertainty <- mc_model$uncertainty
 # ~0 = very confident assignment (good)
 # ~0.5 = pixel sits equally between two clusters (transition zone)
 cat("Pixels per cluster:\n")
@@ -277,8 +258,6 @@ ggplot(cluster_means_long,
 
 ggsave("outputs/cluster_means_heatmap.png", width = 9, height = 5, dpi = 300)
 
-#plot(mc_model_55, what = "classification")
-#plot(mc_model_55, what = "uncertainty")
 
 
 
@@ -289,6 +268,11 @@ ggsave("outputs/cluster_means_heatmap.png", width = 9, height = 5, dpi = 300)
 
 ######################## 10. MAP CLUSTERS BACK TO RASTER ######################## 
 # Convert env_df points to sf object using their coordinates
+ref_grid <- rast(
+  ext(ll_vect),
+  resolution = 0.0009,
+  crs        = "EPSG:4326")
+
 cluster_points <- st_as_sf(
   env_df[, c("x", "y", "cluster", "uncertainty")],
   coords = c("x", "y"),
@@ -325,15 +309,16 @@ cat("Non-NA pixels:", sum(!is.na(values(cluster_rast))),
 
 
 
-######### PLOTTING CLUSTER MAP #####################
+######### Plotting final cluster map #####################
 display.brewer.all()
-cls_colors <- brewer.pal(max(optimal_G, 10), "Set2")[1:optimal_G]
+cls_colors <- brewer.pal(max(optimal_G, 8), "Set2")[1:optimal_G]
 
 #cls_colors_6 <- c("#2166ac", "#f4a582", "#1a9641", "darkolivegreen4", "darkorange2", "khaki3")
 
 plot(cluster_rast,
      col    = cls_colors,
-     main   = paste0(optimal_G, " Environmental Clusters — Embu Living Lab"),
+     main   = paste0(optimal_G, " Assigned Clusters according to 7 environmental 
+     and landscape variables for the GALILEO Living Lab, Embu County, Kenya"),
      legend = TRUE,
      axes   = TRUE)
 plot(ll_vect, add = TRUE, border = "black", lwd = 2)
@@ -341,7 +326,7 @@ plot(ll_vect, add = TRUE, border = "black", lwd = 2)
 # Uncertainty map — white = confident, red = transition zone
 plot(uncert_rast,
      col  = rev(heat.colors(50)),
-     main = "Cluster Uncertainty — high values = transition zones")
+     main = "Cluster Uncertainty ")
 plot(ll_vect, add = TRUE, border = "black", lwd = 2)
 # White/pale areas = confident assignment (most pixels)
 # Orange/red areas = ambiguous pixels between clusters
@@ -351,54 +336,423 @@ plot(ll_vect, add = TRUE, border = "black", lwd = 2)
 
 
 
-
-
-
-
-
-######### EXPORT FOR QGIS or ODK ########################### 
+######### Export cluster&uncertainty map in .tif for QGIS/ODK ########################### 
 # Unsure about this follwing part 
 dir.create("outputs/", showWarnings = FALSE)
 
 writeRaster(cluster_rast,
-            "outputs/LL_mclust_10.tif",
+            "outputs/LL_mclust_7_FINAL.tif",
             overwrite = TRUE,
             datatype  = "INT1U")
 
 writeRaster(uncert_rast,
-            "outputs/LL_uncertainty_mclust_10.tif",
+            "outputs/LL_uncertainty_mclust_7_FINAL.tif",
             overwrite = TRUE)
 
 # maybe useful to export cluster assignments with coordinates as CSV
 write_csv(env_df[, c("x", "y", "cluster", "uncertainty")],
-          "outputs/Embu_cluster_pixels_9.csv")
+          "outputs/Embu_cluster_7_FINAL.csv")
+
+cat("Cluster rasters exported\n")
 
 
-######### 12. SAMPLING ALLOCATION PER CLUSTER ######### 
-# Proportional allocation = weighted stratified sampling? 
-# minimum of 2 plots per stratum? 
-# ASSUMPTION
-# 3 weeks sampling are 15 field days --> 8 subplots per day on average = 120 subplots in total = 30 plots in total 
+############# 11. EXCLUSION OF HIGH UNCERTAINTIES ########################### 
+cat("\nUncertainty distribution:\n")
+print(summary(env_df$uncertainty))
+# Max=0.73 
 
-cluster_alloc <- cluster_area %>%
+cat("\nPixels with uncertainty >= 0.20 (transition zones):",
+    sum(env_df$uncertainty > 0.20), "\n") #24406
+cat("Percentage of total pixels:",
+    round(sum(env_df$uncertainty > 0.20) / nrow(env_df) * 100, 1), "%\n")
+# So 16.3% of total pixcels are in high uncertainty areas and therefore excluded for sampling. 
+# median is only 0.021 --> most pixels are assigned with very high confidence! good:)
+
+# Exclude uncertainty > 0.20 from sampling 
+#(mainly pixels between clusters and therefore it may not be representable for any of the strata)
+
+#### Confident sampling frame ##
+sampling_frame <- env_df %>%
+  filter(uncertainty <= 0.20) %>%
+  dplyr::select(x, y, cluster)
+cat("\nPixels in confident sampling frame:", nrow(sampling_frame), "\n")
+#Pixels in confident sampling frame: 125681 
+cat("Pixels excluded:", nrow(env_df) - nrow(sampling_frame), "\n")
+#Pixels excluded: 24406 
+write_csv(sampling_frame, "outputs/EmbuLL_sampling_frame_confident.csv")
+
+
+
+# applying uncertainty mask to cluster raster
+# This is the raster used for plot placement — uncertain pixels are NA
+cluster_rast_confident <- ifel(uncert_rast > 0.20, NA, cluster_rast)
+cluster_rast_confident <- mask(cluster_rast_confident, ll_vect)
+
+writeRaster(cluster_rast_confident,
+            "outputs/EmbuLL_clusters_VVV7_confident.tif",
+            overwrite = TRUE,
+            datatype  = "INT1U")
+
+
+
+
+############# 12.  EXCLUSION MASK FROM OSM ############# 
+# Excludes roads, buildings and waterbodies from sampling frame
+# Gardens/homesteads around buildings are ok
+# so building buffer is kept small (10m around structure only) bcs gardens can be included
+# download from R didnt work (timeout) so downloaded locally Kenya OSM shapefiles 
+# https://download.geofabrik.de/africa/kenya-latest.shp.zip
+osm_path <- "data/shapefiles/osm/"
+
+# Load and clip each layer to LL boundary
+roads_raw <- st_read(paste0(osm_path, "gis_osm_roads_free_1.shp")) %>%
+  st_crop(st_bbox(ll_boundary)) %>%
+  filter(fclass %in% c("primary", "secondary", "tertiary",
+                       "residential", "unclassified", "track"))
+
+buildings_raw <- st_read(paste0(osm_path,
+                                "gis_osm_buildings_a_free_1.shp")) %>%
+  st_crop(st_bbox(ll_boundary))
+
+
+# Example approach
+library(sf)
+buildings_raw <- st_read(
+  paste0(osm_path, "gis_osm_buildings_a_free_1.shp"),
+  bbox = st_bbox(ll_boundary) # Limits reading to this area
+)
+
+
+water_poly_raw <- st_read(paste0(osm_path,
+                                 "gis_osm_water_a_free_1.shp")) %>%
+  st_crop(st_bbox(ll_boundary))
+
+waterways_raw <- st_read(paste0(osm_path,
+                                "gis_osm_waterways_free_1.shp")) %>%
+  st_crop(st_bbox(ll_boundary))
+
+protectedareas_raw <- st_read(paste0(osm_path,
+                                     "gis_osm_protected_areas_a_free_1.shp")) %>%
+  st_crop(st_bbox(ll_boundary))
+
+cat("Roads loaded:", nrow(roads_raw), "features\n")
+cat("Buildings loaded:", nrow(buildings_raw), "features\n")
+cat("Water polygons loaded:", nrow(water_poly_raw), "features\n")
+cat("Waterways loaded:", nrow(waterways_raw), "features\n")
+cat("Protected areas:", nrow(protectedareas_raw), "features\n")
+
+
+# Buffer each layer — all in UTM metres then back to WGS84
+roads_buf <- roads_raw %>%
+  st_transform(32737) %>%
+  st_buffer(dist = 30) %>%    # 30m either side of road
+  st_union() %>%
+  st_transform(4326)
+
+buildings_buf <- buildings_raw %>%
+  st_transform(32737) %>%
+  st_buffer(dist = 10) %>%    # 10m around structure only
+  st_union() %>%              # gardens/homesteads are OK
+  st_transform(4326)
+
+water_buf <- water_poly_raw %>%
+  st_transform(32737) %>%
+  st_buffer(dist = 5) %>%
+  st_union() %>%
+  st_transform(4326)
+
+waterways_buf <- waterways_raw %>%
+  st_transform(32737) %>%
+  st_buffer(dist = 10) %>%    # 10m either side of river
+  st_union() %>%
+  st_transform(4326)
+
+protectedareas_buf <- protectedareas_raw %>%
+  st_transform(32737) %>%
+  st_buffer(dist = 50) %>%    # 50m from PA boundaries
+  st_union() %>%
+  st_transform(4326)
+
+# Combine all exclusion zones into one polygon
+exclusion_sf <- st_union(roads_buf, buildings_buf) %>%
+  st_union(water_buf) %>%
+  st_union(waterways_buf) %>%
+  st_union(protected_excl) %>%   
+  st_make_valid()
+
+cat("Exclusion mask built \n")
+
+# Continue with rasterize step as before
+excl_rast <- rasterize(
+  vect(exclusion_sf),
+  ref_grid,
+  field      = 1,
+  background = 0)
+excl_rast <- mask(excl_rast, ll_vect)
+
+writeRaster(excl_rast,
+            "outputs/EmbuLL_exclusion_mask.tif",
+            overwrite = TRUE,
+            datatype  = "INT1U")
+
+cat("Exclusion mask exported — check in QGIS before continuing\n")
+
+
+
+
+
+# Combine all exclusion zones
+cat("Building exclusion mask...\n")
+exclusion_sf <- st_union(roads_buf, buildings_buf) %>%
+  st_union(water_exclude) %>%
+  st_make_valid()
+
+# Rasterize exclusion mask
+excl_rast <- rasterize(
+  vect(exclusion_sf),
+  ref_grid,
+  field      = 1,
+  background = 0)
+excl_rast <- mask(excl_rast, ll_vect)
+
+# Apply exclusion to confident cluster raster
+cluster_rast_final <- ifel(excl_rast == 1, NA, cluster_rast_confident)
+cluster_rast_final <- mask(cluster_rast_final, ll_vect)
+
+writeRaster(cluster_rast_final,
+            "outputs/EmbuLL_clusters_VVV7_final.tif",
+            overwrite = TRUE,
+            datatype  = "INT1U")
+
+writeRaster(excl_rast,
+            "outputs/EmbuLL_exclusion_mask.tif",
+            overwrite = TRUE,
+            datatype  = "INT1U")
+
+cat("Exclusion mask exported\n")
+
+
+
+
+
+
+#############  13. SAMPLING ALLOCATION ############# 
+# 15 field days × 8 subplots/day = 120 subplots
+# 4 subplots per plot → 28 plots total
+# LDSF minimum: 3 plots per cluster
+# Weighted proportionally by available (post-mask) pixel count
+
+masked_df <- as.data.frame(cluster_rast_final, xy = TRUE, na.rm = TRUE)
+names(masked_df)[3] <- "cluster"
+masked_df$cluster <- as.factor(masked_df$cluster)
+
+cat("\nPixels available per cluster after all masks:\n")
+print(table(masked_df$cluster))
+
+total_plots <- 28
+
+cluster_alloc <- masked_df %>%
+  count(cluster) %>%
+  rename(N_pixels_available = n) %>%
   mutate(
-    prop           = N_pixels / sum(N_pixels), # should i work with pixel as weighting factor? or size%?
-    total_clusters = 30,
-    alloc_prop     = round(prop * total_clusters),
-    alloc_final    = pmax(alloc_prop, 2))   # minimum 2 per stratum? 
-cat("\nSampling allocation per cluster:\n")
-print(cluster_alloc)
-# alloc_final
-#1           5
-#2           3
-#3           5
-#4           7
-#5           7
-#6           3
-cat("Total plots:", sum(cluster_alloc$alloc_final), "\n")
-cat("Total sub-plots (x4):", sum(cluster_alloc$alloc_final) * 4, "\n")
+    prop        = N_pixels_available / sum(N_pixels_available),
+    alloc_prop  = round(prop * total_plots),
+    alloc_final = pmax(alloc_prop, 3),   # LDSF minimum 3 per cluster
+    subplots    = alloc_final * 4
+  )
 
-write_csv(cluster_alloc, "outputs/EmbuLL_cluster_allocation.csv")
+# Balance total to exactly 28 plots
+while (sum(cluster_alloc$alloc_final) > total_plots) {
+  idx <- which.max(cluster_alloc$alloc_final)
+  cluster_alloc$alloc_final[idx] <- cluster_alloc$alloc_final[idx] - 1
+}
+while (sum(cluster_alloc$alloc_final) < total_plots) {
+  idx <- which.max(cluster_alloc$prop)
+  cluster_alloc$alloc_final[idx] <- cluster_alloc$alloc_final[idx] + 1
+}
+cluster_alloc$subplots <- cluster_alloc$alloc_final * 4
+
+cat("\nFinal sampling allocation (VVV,7 — 28 plots):\n")
+print(cluster_alloc[, c("cluster", "N_pixels_available",
+                        "prop", "alloc_final", "subplots")])
+cat("Total plots:   ", sum(cluster_alloc$alloc_final), "\n")
+cat("Total subplots:", sum(cluster_alloc$subplots), "\n")
+
+write_csv(cluster_alloc, "outputs/EmbuLL_allocation_VVV7.csv")
+
+
+
+
+
+
+
+# ── RANDOM PLOT PLACEMENT WITH 250m MINIMUM SPACING ──────────
+# spatSample() draws random points within each cluster mask
+# Greedy distance filter enforces 250m minimum between plot centres
+# Plot centres are the coordinates pre-loaded into QField GPS
+
+set.seed(55)
+all_plots <- list()
+
+for (cl in levels(masked_df$cluster)) {
+  
+  n_plots <- cluster_alloc$alloc_final[cluster_alloc$cluster == cl]
+  if (is.na(n_plots) || n_plots == 0) next
+  
+  # Isolate this cluster in the final masked raster
+  cl_mask <- ifel(cluster_rast_final == as.integer(cl), 1, NA)
+  
+  # Oversample then filter by spacing
+  pts <- spatSample(
+    cl_mask,
+    size   = n_plots * 15,   # oversample generously
+    method = "random",
+    na.rm  = TRUE,
+    xy     = TRUE
+  )
+  
+  if (nrow(pts) < 1) {
+    cat("Warning: no valid pixels for cluster", cl, "\n")
+    next
+  }
+  
+  # Project to UTM zone 37S for distance in metres
+  pts_sf <- st_as_sf(pts, coords = c("x", "y"), crs = 4326) %>%
+    st_transform(32737)
+  
+  # Greedy selection: keep point only if >250m from all selected
+  selected <- pts_sf[1, ]
+  for (i in seq_len(nrow(pts_sf))) {
+    if (nrow(selected) >= n_plots) break
+    dists <- as.numeric(st_distance(pts_sf[i, ], selected))
+    if (all(dists > 250)) {
+      selected <- rbind(selected, pts_sf[i, ])
+    }
+  }
+  
+  if (nrow(selected) < n_plots) {
+    cat("Warning: cluster", cl, "— placed", nrow(selected),
+        "of", n_plots, "plots (area may be too small for spacing)\n")
+  }
+  
+  selected$cluster <- cl
+  selected$plot_id <- paste0("C", cl, "_P",
+                             formatC(seq_len(nrow(selected)),
+                                     width = 2, flag = "0"))
+  all_plots[[cl]] <- selected
+  cat("Cluster", cl, "→", nrow(selected), "plots placed\n")
+}
+
+plot_centres <- do.call(rbind, all_plots) %>%
+  st_transform(4326)
+
+cat("\nTotal plots placed:", nrow(plot_centres), "\n")
+
+
+
+
+#############  14. GENERATE LDSF SUBPLOT COORDINATES ############# 
+# LDSF layout: 1 centre subplot + 3 at 11.28m at 0°/120°/240°
+# 11.28m = 2 × subplot radius (5.64m) so subplots do not overlap
+
+generate_subplots <- function(centre_sf, plot_id, cluster_id) {
+  c_utm  <- st_transform(centre_sf, 32737)
+  coords <- st_coordinates(c_utm)
+  
+  angles <- c(0, 120, 240)
+  dist   <- 11.28
+  
+  all_coords <- rbind(
+    coords,
+    cbind(
+      coords[1] + dist * sin(angles * pi / 180),
+      coords[2] + dist * cos(angles * pi / 180)
+    )
+  )
+  
+  st_as_sf(
+    data.frame(
+      plot_id    = plot_id,
+      subplot_id = paste0(plot_id, "_S", 1:4),
+      subplot_no = 1:4,
+      cluster    = cluster_id,
+      note       = c("Centre", "North (0°)", "SE (120°)", "SW (240°)"),
+      radius_m   = 5.64,
+      area_m2    = 100
+    ),
+    geometry = st_sfc(
+      lapply(1:4, function(i) st_point(all_coords[i, ])),
+      crs = 32737
+    )
+  ) %>% st_transform(4326)
+}
+
+all_subplots <- mapply(
+  generate_subplots,
+  centre_sf  = lapply(seq_len(nrow(plot_centres)),
+                      function(i) plot_centres[i, ]),
+  plot_id    = plot_centres$plot_id,
+  cluster_id = plot_centres$cluster,
+  SIMPLIFY   = FALSE
+)
+
+subplots_all <- do.call(rbind, all_subplots)
+cat("Total subplots generated:", nrow(subplots_all), "\n")
+
+#############  15. EXPORT FOR QGIS -> ODK LDSF ############# 
+st_write(plot_centres,
+         "outputs/EmbuLL_plot_centres_VVV7.gpkg",
+         delete_dsn = TRUE)
+
+st_write(subplots_all,
+         "outputs/EmbuLL_subplots_VVV7.gpkg",
+         delete_dsn = TRUE)
+
+# CSV versions with explicit lat/lon for GPS devices
+coords_p <- st_coordinates(plot_centres)
+write_csv(
+  plot_centres %>%
+    st_drop_geometry() %>%
+    mutate(longitude = coords_p[, 1], latitude = coords_p[, 2]),
+  "outputs/EmbuLL_plot_centres_VVV7.csv"
+)
+
+coords_s <- st_coordinates(subplots_all)
+write_csv(
+  subplots_all %>%
+    st_drop_geometry() %>%
+    mutate(longitude = coords_s[, 1], latitude = coords_s[, 2]),
+  "outputs/EmbuLL_subplots_VVV7.csv"
+)
+
+cat("\nAll outputs exported to outputs/\n")
+cat("Files for QGIS/QField:\n")
+cat("  EmbuLL_clusters_VVV7_final.tif   — cluster map\n")
+cat("  EmbuLL_uncertainty_VVV7.tif      — uncertainty map\n")
+cat("  EmbuLL_exclusion_mask.tif        — roads/buildings/water\n")
+cat("  EmbuLL_plot_centres_VVV7.gpkg    — 28 plot centres\n")
+cat("  EmbuLL_subplots_VVV7.gpkg        — 112 subplot points\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
